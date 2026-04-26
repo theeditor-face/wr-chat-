@@ -1,0 +1,11 @@
+{
+  "functions": {
+    "api/notify.js": {
+      "memory": 128,
+      "maxDuration": 10
+    }
+  },
+  "routes": [
+    { "src": "/api/notify", "dest": "/api/notify.js" }
+  ]
+}

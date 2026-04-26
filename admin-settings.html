@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Settings — Wholesale Realtors Chat</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="top-bar">
+  <div class="top-bar-logo">
+    <div class="logo-dot"></div>
+    Wholesale <em>&nbsp;Realtors Chat</em>
+  </div>
+  <div class="top-bar-right">
+    <button class="back-btn" onclick="window.location.href='admin.html'">← Back to Dashboard</button>
+  </div>
+</div>
+
+<div class="settings-page">
+  <div class="settings-container">
+    <div class="settings-title">⚙️ Settings</div>
+
+    <!-- Identity -->
+    <div class="settings-card">
+      <h3>👤 Your Identity</h3>
+      <div class="settings-field">
+        <label>Your Display Name (shown to customers)</label>
+        <input type="text" id="adminName" placeholder="Jake Carter"/>
+      </div>
+      <div class="settings-field">
+        <label>Admin Password</label>
+        <input type="password" id="adminPass" placeholder="Enter new password (leave blank to keep current)"/>
+      </div>
+      <button class="save-btn" onclick="saveIdentity()">Save Identity</button>
+    </div>
+
+    <!-- Branding -->
+    <div class="settings-card">
+      <h3>🏠 Site Branding</h3>
+      <div class="settings-field">
+        <label>Site Name</label>
+        <input type="text" id="siteName" placeholder="Wholesale Realtors Chat"/>
+      </div>
+      <div class="settings-field">
+        <label>Welcome Message (shown to new visitors)</label>
+        <textarea id="welcomeMsg" rows="3" placeholder="Chat directly with Jake Carter about investment properties..."></textarea>
+      </div>
+      <div class="settings-field">
+        <label>Agent Status Text</label>
+        <input type="text" id="agentStatus" placeholder="Online — typically replies instantly"/>
+      </div>
+      <button class="save-btn" onclick="saveBranding()">Save Branding</button>
+    </div>
+
+    <!-- Notifications -->
+    <div class="settings-card">
+      <h3>🔔 Notifications</h3>
+      <div class="settings-field">
+        <label>Notification Sound</label>
+        <select id="notifSound">
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="settings-field">
+        <label>Auto-Reply Message (sent instantly when someone starts a chat)</label>
+        <textarea id="autoReply" rows="3" placeholder="Hey! Thanks for reaching out to Wholesale Realtors. Jake will be with you shortly 🏠"></textarea>
+      </div>
+      <button class="save-btn" onclick="saveNotifications()">Save Notifications</button>
+    </div>
+
+    <!-- Danger zone -->
+    <div class="settings-card" style="border-color:rgba(239,68,68,0.25);">
+      <h3>⚠️ Danger Zone</h3>
+      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:16px;">These actions cannot be undone. Be careful.</p>
+      <div class="settings-row">
+        <button class="danger-btn" onclick="clearAllChats()">🗑 Clear All Chats</button>
+        <button class="danger-btn" onclick="clearResolvedChats()">🧹 Clear Resolved Chats</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  // Auth check
+  if (sessionStorage.getItem('wr-admin-auth') !== '1') window.location.href = 'admin.html';
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  // Load current settings
+  async function loadSettings() {
+    const doc = await db.collection('settings').doc('admin').get();
+    if (doc.exists) {
+      const d = doc.data();
+      if (d.adminName)   document.getElementById('adminName').value   = d.adminName;
+      if (d.siteName)    document.getElementById('siteName').value    = d.siteName;
+      if (d.welcomeMsg)  document.getElementById('welcomeMsg').value  = d.welcomeMsg;
+      if (d.agentStatus) document.getElementById('agentStatus').value = d.agentStatus;
+      if (d.autoReply)   document.getElementById('autoReply').value   = d.autoReply;
+      if (d.notifSound)  document.getElementById('notifSound').value  = d.notifSound;
+    } else {
+      // Defaults
+      document.getElementById('adminName').value   = ADMIN_NAME;
+      document.getElementById('siteName').value    = SITE_NAME;
+    }
+  }
+
+  async function saveIdentity() {
+    const name = document.getElementById('adminName').value.trim();
+    const pass = document.getElementById('adminPass').value.trim();
+    if (!name) { showToast('❌ Name cannot be empty'); return; }
+    const update = { adminName: name };
+    if (pass) update.adminPass = pass;
+    await db.collection('settings').doc('admin').set(update, { merge: true });
+    showToast('✅ Identity saved');
+  }
+
+  async function saveBranding() {
+    await db.collection('settings').doc('admin').set({
+      siteName:    document.getElementById('siteName').value.trim(),
+      welcomeMsg:  document.getElementById('welcomeMsg').value.trim(),
+      agentStatus: document.getElementById('agentStatus').value.trim()
+    }, { merge: true });
+    showToast('✅ Branding saved');
+  }
+
+  async function saveNotifications() {
+    await db.collection('settings').doc('admin').set({
+      autoReply:   document.getElementById('autoReply').value.trim(),
+      notifSound:  document.getElementById('notifSound').value
+    }, { merge: true });
+    showToast('✅ Notification settings saved');
+  }
+
+  async function clearAllChats() {
+    if (!confirm('Delete ALL conversations? This cannot be undone.')) return;
+    const users = await db.collection('users').get();
+    const msgs  = await db.collection('messages').get();
+    const batch = db.batch();
+    users.forEach(d => batch.delete(d.ref));
+    msgs.forEach(d  => batch.delete(d.ref));
+    await batch.commit();
+    showToast('🗑 All chats cleared');
+  }
+
+  async function clearResolvedChats() {
+    if (!confirm('Delete all resolved conversations?')) return;
+    const resolved = await db.collection('users').where('status','==','resolved').get();
+    const batch = db.batch();
+    for (const u of resolved.docs) {
+      batch.delete(u.ref);
+      const msgs = await db.collection('messages').where('chatCode','==',u.id).get();
+      msgs.forEach(m => batch.delete(m.ref));
+    }
+    await batch.commit();
+    showToast('🧹 Resolved chats cleared');
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast'; t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  document.addEventListener('DOMContentLoaded', loadSettings);
+</script>
+</body>
+</html>

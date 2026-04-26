@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Return to Chat — Wholesale Realtors Chat</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<div class="return-page">
+  <div class="return-card">
+    <div style="font-size:2.5rem;margin-bottom:16px;">🔑</div>
+    <div class="return-title">Welcome <em>Back</em></div>
+    <p class="return-sub">Enter your 4-digit chat code to restore your conversation history.</p>
+
+    <div class="code-input-wrap">
+      <input type="text" class="code-digit" id="d1" maxlength="1" inputmode="numeric" pattern="[0-9]"/>
+      <input type="text" class="code-digit" id="d2" maxlength="1" inputmode="numeric" pattern="[0-9]"/>
+      <input type="text" class="code-digit" id="d3" maxlength="1" inputmode="numeric" pattern="[0-9]"/>
+      <input type="text" class="code-digit" id="d4" maxlength="1" inputmode="numeric" pattern="[0-9]"/>
+    </div>
+
+    <p id="returnError" style="display:none;color:var(--danger);font-size:0.82rem;margin-bottom:14px;">❌ Chat code not found. Please check and try again.</p>
+
+    <button class="entry-btn" id="returnBtn" onclick="returnToChat()">Open My Chat →</button>
+    <div style="margin-top:16px;">
+      <button class="return-btn" onclick="window.location.href='index.html'">← Start a new chat</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  // Auto-advance digits
+  const digits = ['d1','d2','d3','d4'];
+  digits.forEach((id, i) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', e => {
+      e.target.value = e.target.value.replace(/[^0-9]/g,'');
+      if (e.target.value && i < 3) document.getElementById(digits[i+1]).focus();
+      if (i === 3 && e.target.value) returnToChat();
+    });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Backspace' && !el.value && i > 0) document.getElementById(digits[i-1]).focus();
+    });
+    el.addEventListener('paste', e => {
+      e.preventDefault();
+      const pasted = (e.clipboardData.getData('text')||'').replace(/[^0-9]/g,'').slice(0,4);
+      pasted.split('').forEach((ch, j) => {
+        if (digits[j]) document.getElementById(digits[j]).value = ch;
+      });
+      const last = Math.min(pasted.length, 3);
+      document.getElementById(digits[last]).focus();
+    });
+  });
+  document.getElementById('d1').focus();
+
+  async function returnToChat() {
+    const code = digits.map(id => document.getElementById(id).value).join('');
+    if (code.length < 4) return;
+
+    const btn = document.getElementById('returnBtn');
+    btn.disabled = true;
+    btn.textContent = 'Looking up...';
+    document.getElementById('returnError').style.display = 'none';
+
+    const doc = await db.collection('users').doc(code).get();
+    if (!doc.exists || doc.data().status === 'blocked') {
+      document.getElementById('returnError').style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Open My Chat →';
+      digits.forEach(id => { document.getElementById(id).value = ''; document.getElementById(id).style.borderColor='var(--danger)'; });
+      document.getElementById('d1').focus();
+      return;
+    }
+
+    const user = doc.data();
+    sessionStorage.setItem('wr-chat-code', code);
+    sessionStorage.setItem('wr-chat-name', user.name);
+    window.location.href = `chat.html?code=${code}`;
+  }
+</script>
+</body>
+</html>

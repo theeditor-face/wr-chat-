@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Admin — Wholesale Realtors Chat</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div class="admin-login" id="loginScreen">
+  <div class="admin-login-card">
+    <div style="font-size:3rem;margin-bottom:16px;">🔐</div>
+    <h2>Admin Access</h2>
+    <p>Wholesale Realtors Chat</p>
+    <input type="password" class="pass-input" id="passInput" placeholder="••••••" onkeydown="if(event.key==='Enter')checkPass()"/>
+    <p class="pass-error" id="passError" style="display:none;">Incorrect password</p>
+    <button class="entry-btn" onclick="checkPass()">Enter →</button>
+    <p style="margin-top:16px;font-size:0.75rem;color:var(--muted);"><a href="index.html" style="color:var(--gold);">← Back to chat site</a></p>
+  </div>
+</div>
+
+<!-- Admin Panel -->
+<div id="adminPanel" style="display:none;">
+
+  <!-- Top bar -->
+  <div class="admin-topbar">
+    <div class="admin-topbar-left">
+      <div class="admin-topbar-logo">Wholesale <em>Realtors</em></div>
+      <span class="admin-badge">Admin</span>
+      <span id="totalUnread" style="display:none;"></span>
+    </div>
+    <div class="admin-topbar-right">
+      <span id="adminOnlineStatus" style="font-size:0.75rem;color:var(--success);">● Online</span>
+      <button class="admin-action-btn" onclick="window.location.href='admin-settings.html'">⚙️ Settings</button>
+      <button class="admin-action-btn" onclick="logout()">Sign Out</button>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="admin-sidebar">
+    <div class="sidebar-search">
+      <input type="text" placeholder="Search by name or code..." id="searchInput" oninput="filterChats()"/>
+    </div>
+    <div class="sidebar-tabs">
+      <button class="sidebar-tab active" onclick="setFilter('all',this)">All</button>
+      <button class="sidebar-tab" onclick="setFilter('unread',this)">Unread</button>
+      <button class="sidebar-tab" onclick="setFilter('resolved',this)">Resolved</button>
+    </div>
+    <div class="sidebar-list" id="sidebarList">
+      <div class="empty-sidebar">Loading chats...</div>
+    </div>
+  </div>
+
+  <!-- Main Chat Panel -->
+  <div class="admin-chat-panel" id="mainPanel">
+    <div class="no-chat-selected">
+      <div class="no-chat-icon">💬</div>
+      <h2>No chat selected</h2>
+      <p>Select a conversation from the left to start replying.</p>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  firebase.initializeApp(firebaseConfig);
+  const db        = firebase.firestore();
+  const messaging = firebase.messaging();
+
+  let allChats = [];
+  let currentFilter = 'all';
+  let currentChatCode = null;
+  let messagesListener = null;
+  let adminName = ADMIN_NAME;
+  let isTypingTimer = null;
+
+  // ─── AUTH ───
+  function checkPass() {
+    const val = document.getElementById('passInput').value;
+    if (val === ADMIN_PASSWORD) {
+      sessionStorage.setItem('wr-admin-auth', '1');
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('adminPanel').style.display  = 'block';
+      initAdmin();
+    } else {
+      document.getElementById('passError').style.display = 'block';
+      document.getElementById('passInput').value = '';
+    }
+  }
+
+  function logout() {
+    sessionStorage.removeItem('wr-admin-auth');
+    window.location.href = 'admin.html';
+  }
+
+  // ─── INIT ───
+  function initAdmin() {
+    if (sessionStorage.getItem('wr-admin-auth') !== '1') return;
+
+    // Load admin name from settings
+    db.collection('settings').doc('admin').get().then(doc => {
+      if (doc.exists && doc.data().adminName) adminName = doc.data().adminName;
+    });
+
+    // Request admin notifications
+    setupAdminNotifications();
+
+    // Listen to all users (chats)
+    db.collection('users').orderBy('lastMessageTime', 'desc').onSnapshot(snap => {
+      allChats = [];
+      let totalUnread = 0;
+      snap.forEach(doc => {
+        const data = { id: doc.id, ...doc.data() };
+        allChats.push(data);
+        totalUnread += (data.adminUnread || 0);
+      });
+      renderSidebar();
+
+      // Update unread badge
+      const badge = document.getElementById('totalUnread');
+      if (totalUnread > 0) {
+        badge.style.display = 'flex';
+        badge.innerHTML = `<span class="notif-count">${totalUnread}</span>`;
+      } else {
+        badge.style.display = 'none';
+      }
+
+      // Browser title notification
+      document.title = totalUnread > 0 ? `(${totalUnread}) Admin — WR Chat` : 'Admin — WR Chat';
+    });
+  }
+
+  // ─── SIDEBAR ───
+  function renderSidebar() {
+    const list    = document.getElementById('sidebarList');
+    const search  = document.getElementById('searchInput').value.toLowerCase();
+    let filtered  = allChats.filter(c => {
+      if (currentFilter === 'unread'   && !(c.adminUnread > 0)) return false;
+      if (currentFilter === 'resolved' && c.status !== 'resolved') return false;
+      if (search && !c.name?.toLowerCase().includes(search) && !c.chatCode?.includes(search)) return false;
+      return true;
+    });
+
+    if (filtered.length === 0) {
+      list.innerHTML = `<div class="empty-sidebar">${search ? 'No results found' : 'No chats yet'}</div>`;
+      return;
+    }
+
+    list.innerHTML = filtered.map(c => {
+      const initials = (c.name||'?').charAt(0).toUpperCase();
+      const time     = c.lastMessageTime?.toDate ? timeAgo(c.lastMessageTime.toDate()) : '';
+      const preview  = c.lastMessage ? truncate(c.lastMessage, 36) : 'No messages yet';
+      const isActive = c.chatCode === currentChatCode;
+      const unread   = c.adminUnread || 0;
+      const statusTag = c.status === 'resolved' ? '<span class="resolved-tag">Resolved</span>' :
+                        c.status === 'blocked'  ? '<span class="blocked-tag">Blocked</span>'  : '';
+      return `
+        <div class="chat-item ${isActive?'active':''} ${unread>0?'unread':''}" onclick="openChat('${c.chatCode}','${escAttr(c.name||'')}')">
+          <div class="chat-avatar">${initials}</div>
+          <div class="chat-item-info">
+            <div class="chat-item-top">
+              <span class="chat-item-name">${escHtml(c.name||'Unknown')}</span>
+              <span class="chat-item-time">${time}</span>
+            </div>
+            <div class="chat-item-preview">${escHtml(preview)}</div>
+            <div class="chat-item-bottom">
+              <span class="chat-item-code">Code: ${c.chatCode}</span>
+              <div style="display:flex;gap:4px;align-items:center;">
+                ${statusTag}
+                ${unread > 0 ? `<span class="unread-badge">${unread}</span>` : ''}
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function setFilter(f, btn) {
+    currentFilter = f;
+    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    renderSidebar();
+  }
+
+  function filterChats() { renderSidebar(); }
+
+  // ─── OPEN CHAT ───
+  function openChat(code, name) {
+    currentChatCode = code;
+    if (messagesListener) { messagesListener(); messagesListener = null; }
+
+    // Mark as read
+    db.collection('users').doc(code).update({ adminUnread: 0 });
+    renderSidebar();
+
+    const panel = document.getElementById('mainPanel');
+    panel.innerHTML = `
+      <div class="admin-chat-header">
+        <div class="admin-chat-header-left">
+          <div class="chat-avatar" style="width:36px;height:36px;font-size:0.9rem;">${name.charAt(0).toUpperCase()}</div>
+          <div>
+            <div class="admin-chat-name">${escHtml(name)}</div>
+            <div class="admin-chat-code">Code: ${code}</div>
+          </div>
+        </div>
+        <div class="admin-chat-actions">
+          <button class="action-chip success" onclick="resolveChat('${code}')">✓ Resolve</button>
+          <button class="action-chip danger"  onclick="blockChat('${code}')">🚫 Block</button>
+          <button class="action-chip danger"  onclick="deleteChat('${code}')">🗑 Delete</button>
+        </div>
+      </div>
+      <div class="admin-messages" id="adminMsgs">
+        <div class="loading-wrap"><div class="spinner"></div></div>
+      </div>
+      <div class="admin-input-area">
+        <textarea class="admin-textarea" id="adminInput" placeholder="Reply as ${adminName}..." rows="1"></textarea>
+        <button class="admin-send-btn" id="adminSendBtn" onclick="adminReply('${code}','${escAttr(name)}')">Send</button>
+      </div>`;
+
+    // Setup textarea
+    const ta = document.getElementById('adminInput');
+    ta.addEventListener('input', () => {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+      // Typing indicator
+      db.collection('settings').doc('typing').set({ isTyping: true, chatCode: code });
+      clearTimeout(isTypingTimer);
+      isTypingTimer = setTimeout(() => {
+        db.collection('settings').doc('typing').set({ isTyping: false, chatCode: '' });
+      }, 2000);
+    });
+    ta.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        adminReply(code, name);
+      }
+    });
+
+    // Load messages
+    const msgContainer = document.getElementById('adminMsgs');
+    messagesListener = db.collection('messages')
+      .where('chatCode', '==', code)
+      .orderBy('timestamp', 'asc')
+      .onSnapshot(snap => {
+        msgContainer.innerHTML = '';
+        if (snap.empty) {
+          msgContainer.innerHTML = '<div class="loading-wrap"><p style="color:var(--muted);">No messages yet</p></div>';
+          return;
+        }
+        snap.forEach(doc => msgContainer.appendChild(buildAdminMessage(doc.data())));
+        msgContainer.scrollTop = msgContainer.scrollHeight;
+      });
+  }
+
+  function buildAdminMessage(msg) {
+    const wrap = document.createElement('div');
+    const isAdmin  = msg.senderType === 'admin';
+    const isSystem = msg.senderType === 'system';
+    wrap.className = `msg-wrap ${isSystem?'system':isAdmin?'outgoing':'incoming'}`;
+    const time = msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '';
+    wrap.innerHTML = `
+      <div class="msg-bubble">${escHtml(msg.message)}</div>
+      ${!isSystem ? `<div class="msg-meta">
+        ${isAdmin ? `<span style="color:var(--gold);">${escHtml(msg.sender)}</span>` : `<span>${escHtml(msg.sender)}</span>`}
+        <span>${time}</span>
+      </div>` : ''}`;
+    return wrap;
+  }
+
+  // ─── ADMIN REPLY ───
+  async function adminReply(code, customerName) {
+    const input = document.getElementById('adminInput');
+    const text  = input.value.trim();
+    if (!text) return;
+
+    const btn = document.getElementById('adminSendBtn');
+    btn.disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    // Stop typing indicator
+    db.collection('settings').doc('typing').set({ isTyping: false, chatCode: '' });
+    clearTimeout(isTypingTimer);
+
+    try {
+      await db.collection('messages').add({
+        chatCode:   code,
+        sender:     adminName,
+        senderType: 'admin',
+        message:    text,
+        timestamp:  firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      await db.collection('users').doc(code).update({
+        lastMessage:     `${adminName}: ${text}`,
+        lastMessageTime: firebase.firestore.FieldValue.serverTimestamp(),
+        unread:          firebase.firestore.FieldValue.increment(1)
+      });
+
+      // Send push notification to customer
+      const userDoc = await db.collection('users').doc(code).get();
+      const fcmToken = userDoc.data()?.fcmToken;
+      if (fcmToken) {
+        await fetch('/api/notify', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token:    fcmToken,
+            title:    `Message from ${adminName}`,
+            body:     text.length > 80 ? text.substring(0,80)+'...' : text,
+            chatCode: code
+          })
+        });
+      }
+    } catch(e) {
+      console.error('Reply error:', e);
+      alert('Failed to send: ' + e.message);
+    } finally {
+      btn.disabled = false;
+      input.focus();
+    }
+  }
+
+  // ─── CHAT ACTIONS ───
+  async function resolveChat(code) {
+    await db.collection('users').doc(code).update({ status: 'resolved' });
+    showToast('✅ Chat marked as resolved');
+    renderSidebar();
+  }
+
+  async function blockChat(code) {
+    if (!confirm('Block this chat? The customer will no longer be able to send messages.')) return;
+    await db.collection('users').doc(code).update({ status: 'blocked' });
+    showToast('🚫 Chat blocked');
+    currentChatCode = null;
+    document.getElementById('mainPanel').innerHTML = '<div class="no-chat-selected"><div class="no-chat-icon">💬</div><h2>No chat selected</h2><p>Select a conversation from the left.</p></div>';
+  }
+
+  async function deleteChat(code) {
+    if (!confirm('Delete this entire conversation? This cannot be undone.')) return;
+    // Delete messages
+    const msgs = await db.collection('messages').where('chatCode','==',code).get();
+    const batch = db.batch();
+    msgs.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    // Delete user
+    await db.collection('users').doc(code).delete();
+    showToast('🗑 Conversation deleted');
+    currentChatCode = null;
+    document.getElementById('mainPanel').innerHTML = '<div class="no-chat-selected"><div class="no-chat-icon">💬</div><h2>No chat selected</h2><p>Select a conversation from the left.</p></div>';
+  }
+
+  // ─── ADMIN NOTIFICATIONS ───
+  async function setupAdminNotifications() {
+    try {
+      await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') return;
+      const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+      if (token) await db.collection('settings').doc('adminToken').set({ token, updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+    } catch(e) { console.warn('Admin notification setup:', e); }
+  }
+
+  // ─── UTILS ───
+  function timeAgo(date) {
+    const diff = Date.now() - date.getTime();
+    const mins = Math.floor(diff/60000);
+    if (mins < 1)  return 'now';
+    if (mins < 60) return `${mins}m`;
+    const hrs = Math.floor(mins/60);
+    if (hrs < 24)  return `${hrs}h`;
+    return `${Math.floor(hrs/24)}d`;
+  }
+  function truncate(str, n) { return str.length > n ? str.slice(0,n)+'...' : str; }
+  function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,' '); }
+  function escAttr(s) { return String(s||'').replace(/'/g,"\\'"); }
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'toast'; t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  // ─── AUTO INIT ───
+  document.addEventListener('DOMContentLoaded', () => {
+    if (sessionStorage.getItem('wr-admin-auth') === '1') {
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('adminPanel').style.display  = 'block';
+      initAdmin();
+    }
+  });
+</script>
+</body>
+</html>

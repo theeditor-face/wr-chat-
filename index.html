@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Wholesale Realtors Chat</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<div class="entry-page" id="entryPage">
+  <div class="entry-card">
+    <div class="entry-logo">🏠</div>
+    <div class="entry-site-name">Wholesale Realtors <em>Chat</em></div>
+    <p class="entry-subtitle">Chat directly with Jake Carter about investment properties. Get a personal chat code to return anytime.</p>
+
+    <!-- Start Chat Form -->
+    <div id="startForm">
+      <input type="text" class="entry-input" id="nameInput" placeholder="Enter your name..." maxlength="40" autocomplete="off"/>
+      <button class="entry-btn" id="startBtn" onclick="startChat()">💬 Start Chat</button>
+      <div class="entry-divider"><span></span><p>Already have a code?</p><span></span></div>
+      <button class="return-btn" onclick="window.location.href='return.html'">🔑 Return with my code</button>
+      <p class="entry-privacy">🔒 Your privacy is protected. We only use your name to identify you in chat.</p>
+    </div>
+
+    <!-- Code Reveal -->
+    <div id="codeReveal" class="code-reveal" style="display:none;">
+      <p style="color:var(--muted);font-size:0.875rem;margin-bottom:8px;">Welcome, <strong id="welcomeName" style="color:var(--text);"></strong>!</p>
+      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:16px;">Your personal chat code is:</p>
+      <div class="code-box">
+        <div class="code-label">Your Chat Code</div>
+        <div class="code-number" id="codeDisplay">----</div>
+        <button class="code-copy-btn" onclick="copyCode()">📋 Copy</button>
+      </div>
+      <div class="code-warning">
+        ⚠️ <strong>Save this code!</strong> You'll need it to return to this chat later. Screenshot it or write it down.
+      </div>
+      <button class="entry-btn" id="goToChatBtn" onclick="goToChat()">Open Chat →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  // Init Firebase
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  let generatedCode = null;
+  let userName = null;
+
+  function generateCode() {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+  }
+
+  async function startChat() {
+    const name = document.getElementById('nameInput').value.trim();
+    if (!name) {
+      document.getElementById('nameInput').style.borderColor = 'var(--danger)';
+      return;
+    }
+
+    const btn = document.getElementById('startBtn');
+    btn.disabled = true;
+    btn.textContent = 'Setting up...';
+
+    // Generate unique code
+    let code;
+    let attempts = 0;
+    do {
+      code = generateCode();
+      const existing = await db.collection('users').doc(code).get();
+      if (!existing.exists) break;
+      attempts++;
+    } while (attempts < 10);
+
+    generatedCode = code;
+    userName = name;
+
+    // Save user to Firestore
+    await db.collection('users').doc(code).set({
+      chatCode:  code,
+      name:      name,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      status:    'active',
+      unread:    0,
+      lastMessage: '',
+      lastMessageTime: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // System message
+    await db.collection('messages').add({
+      chatCode:   code,
+      sender:     'System',
+      senderType: 'system',
+      message:    `${name} joined the chat. Chat code: ${code}`,
+      timestamp:  firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Show code reveal
+    document.getElementById('startForm').style.display = 'none';
+    document.getElementById('welcomeName').textContent = name;
+    document.getElementById('codeDisplay').textContent = code;
+    document.getElementById('codeReveal').style.display = 'block';
+  }
+
+  function copyCode() {
+    navigator.clipboard.writeText(generatedCode).then(() => {
+      const btn = document.querySelector('.code-copy-btn');
+      btn.textContent = '✅ Copied!';
+      setTimeout(() => btn.textContent = '📋 Copy', 2000);
+    });
+  }
+
+  function goToChat() {
+    sessionStorage.setItem('wr-chat-code', generatedCode);
+    sessionStorage.setItem('wr-chat-name', userName);
+    window.location.href = `chat.html?code=${generatedCode}`;
+  }
+
+  // Enter key on name input
+  document.getElementById('nameInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') startChat();
+  });
+  document.getElementById('nameInput').addEventListener('input', e => {
+    e.target.style.borderColor = '';
+  });
+</script>
+</body>
+</html>
