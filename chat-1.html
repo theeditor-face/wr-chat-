@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>Chat — Wholesale Realtors</title>
+  <link rel="manifest" href="/manifest.json"/>
+  <meta name="theme-color" content="#C9A84C"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="top-bar">
+  <div class="top-bar-logo">
+    <div class="logo-dot"></div>
+    Wholesale <em>&nbsp;Realtors</em>
+  </div>
+  <div class="top-bar-right">
+    <span class="top-bar-code" id="codeTag">Code: ----</span>
+  </div>
+</div>
+
+<!-- Chat page -->
+<div class="chat-page">
+  <!-- Agent header -->
+  <div class="chat-header-bar">
+    <div class="chat-agent-avatar">
+      🏠
+      <div class="online-dot" id="onlineDot"></div>
+    </div>
+    <div class="chat-agent-info">
+      <div class="chat-agent-name" id="agentName">Jake Carter</div>
+      <div class="chat-agent-status" id="agentStatus">Online — typically replies instantly</div>
+    </div>
+  </div>
+
+
+  <!-- Notification prompt banner -->
+  <div id="notifBanner" style="display:none;background:rgba(201,168,76,0.12);border-bottom:1px solid rgba(201,168,76,0.3);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+    <span style="font-size:0.8rem;color:#E8C97A;">🔔 Enable notifications to know when Jake replies</span>
+    <button onclick="askNotifPermission()" style="background:linear-gradient(135deg,#C9A84C,#9A7A2E);border:none;color:#fff;padding:7px 16px;border-radius:8px;font-size:0.78rem;font-weight:600;cursor:pointer;white-space:nowrap;">Enable</button>
+    <button onclick="document.getElementById('notifBanner').style.display='none'" style="background:none;border:none;color:#7A8099;font-size:1rem;cursor:pointer;padding:4px;">✕</button>
+  </div>
+  <!-- Messages -->
+  <div class="chat-messages" id="chatMessages">
+    <div class="loading-wrap"><div class="spinner"></div><p>Loading your conversation...</p></div>
+  </div>
+
+  <!-- Typing indicator (hidden by default) -->
+  <div id="typingWrap" style="display:none;padding:4px 16px 0;">
+    <div class="msg-wrap incoming" style="margin:0;">
+      <div class="msg-bubble" style="padding:8px 14px;">
+        <div class="typing-indicator">
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+          <div class="typing-dot"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Input -->
+  <div class="chat-input-area">
+    <textarea class="chat-textarea" id="msgInput" placeholder="Type a message..." rows="1"></textarea>
+    <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+  firebase.initializeApp(firebaseConfig);
+  const db        = firebase.firestore();
+  const messaging = firebase.messaging();
+
+  // Get chat info
+  const params   = new URLSearchParams(window.location.search);
+  const chatCode = params.get('code') || sessionStorage.getItem('wr-chat-code');
+  const userName = sessionStorage.getItem('wr-chat-name') || 'You';
+
+  if (!chatCode) { window.location.href = 'index.html'; }
+
+  document.getElementById('codeTag').textContent = `Code: ${chatCode}`;
+  let messagesListener = null;
+  let fcmToken = null;
+
+  // ─── Request push notifications ───
+  async function requestNotifications() {
+    try {
+      // Register service worker first
+      const reg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+      await navigator.serviceWorker.ready;
+
+      // Request permission
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        console.warn('Notification permission denied');
+        return;
+      }
+
+      // Get FCM token
+      const token = await messaging.getToken({
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: reg
+      });
+
+      if (token) {
+        fcmToken = token;
+        await db.collection('users').doc(chatCode).update({ fcmToken: token });
+        console.log('FCM token saved');
+      }
+    } catch(e) {
+      console.warn('Notification setup failed:', e.message);
+    }
+  }
+
+  // ─── Load and listen to messages ───
+  function loadMessages() {
+    const container = document.getElementById('chatMessages');
+
+    messagesListener = db.collection('messages')
+      .where('chatCode', '==', chatCode)
+      .orderBy('timestamp', 'asc')
+      .onSnapshot(snap => {
+        if (snap.empty) {
+          container.innerHTML = `
+            <div class="chat-empty">
+              <div class="chat-empty-icon">💬</div>
+              <h3>Start the conversation</h3>
+              <p>Send a message and Jake Carter will reply shortly.</p>
+            </div>`;
+          return;
+        }
+
+        container.innerHTML = '';
+        snap.forEach(doc => {
+          const msg = doc.data();
+          container.appendChild(buildMessage(msg));
+        });
+        scrollToBottom();
+
+        // Mark admin messages as read
+        db.collection('users').doc(chatCode).update({ unread: 0 }).catch(()=>{});
+      });
+  }
+
+  function buildMessage(msg) {
+    const wrap = document.createElement('div');
+    const isOutgoing = msg.senderType === 'user';
+    const isSystem   = msg.senderType === 'system';
+
+    wrap.className = `msg-wrap ${isSystem ? 'system' : isOutgoing ? 'outgoing' : 'incoming'}`;
+
+    const time = msg.timestamp?.toDate
+      ? msg.timestamp.toDate().toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'})
+      : '';
+
+    wrap.innerHTML = `
+      <div class="msg-bubble">${escHtml(msg.message)}</div>
+      ${!isSystem ? `<div class="msg-meta">
+        ${isOutgoing ? `<span class="msg-tick">✓✓</span>` : `<span>Jake Carter</span>`}
+        <span>${time}</span>
+      </div>` : ''}`;
+    return wrap;
+  }
+
+  function escHtml(str) {
+    return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  }
+
+  function scrollToBottom() {
+    const c = document.getElementById('chatMessages');
+    c.scrollTop = c.scrollHeight;
+  }
+
+  // ─── Send message ───
+  async function sendMessage() {
+    const input = document.getElementById('msgInput');
+    const text  = input.value.trim();
+    if (!text) return;
+
+    const btn = document.getElementById('sendBtn');
+    btn.disabled = true;
+    input.value = '';
+    input.style.height = 'auto';
+
+    try {
+      await db.collection('messages').add({
+        chatCode:   chatCode,
+        sender:     userName,
+        senderType: 'user',
+        message:    text,
+        timestamp:  firebase.firestore.FieldValue.serverTimestamp()
+      });
+
+      // Update last message on user doc
+      await db.collection('users').doc(chatCode).update({
+        lastMessage:     text,
+        lastMessageTime: firebase.firestore.FieldValue.serverTimestamp(),
+        adminUnread:     firebase.firestore.FieldValue.increment(1)
+      });
+
+    } catch(e) {
+      console.error('Send error:', e);
+      alert('Failed to send. Check your connection.');
+    } finally {
+      btn.disabled = false;
+      input.focus();
+    }
+  }
+
+  // ─── Auto resize textarea ───
+  const textarea = document.getElementById('msgInput');
+  textarea.addEventListener('input', () => {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+  });
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // ─── Admin typing indicator ───
+  db.collection('settings').doc('typing').onSnapshot(doc => {
+    if (!doc.exists) return;
+    const data = doc.data();
+    const isTyping = data.isTyping && data.chatCode === chatCode;
+    document.getElementById('typingWrap').style.display = isTyping ? 'block' : 'none';
+    if (isTyping) scrollToBottom();
+  });
+
+  // ─── Init ───
+  document.addEventListener('DOMContentLoaded', () => {
+    requestNotifications();
+    showNotifBanner();
+    loadMessages();
+
+    // Check if blocked
+    db.collection('users').doc(chatCode).onSnapshot(doc => {
+      if (!doc.exists) return;
+      const data = doc.data();
+      if (data.status === 'blocked') {
+        document.getElementById('msgInput').disabled = true;
+        document.getElementById('sendBtn').disabled  = true;
+        document.getElementById('msgInput').placeholder = 'This chat has been blocked.';
+      }
+      const agentStatus = document.getElementById('agentStatus');
+      if (agentStatus) agentStatus.textContent = data.status === 'resolved' ? 'Chat resolved ✓' : 'Online — typically replies instantly';
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "Wholesale Realtors Chat",
+  "short_name": "WR Chat",
+  "description": "Chat directly with Jake Carter about investment properties",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080C18",
+  "theme_color": "#C9A84C",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/googlesamples/web-push-book/main/app/images/touch/chrome-touch-icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/googlesamples/web-push-book/main/app/images/touch/chrome-touch-icon-192x192.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
